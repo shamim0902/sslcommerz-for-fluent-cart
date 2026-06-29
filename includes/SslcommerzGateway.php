@@ -7,12 +7,15 @@ use FluentCart\App\Helpers\Helper;
 use FluentCart\App\Models\OrderTransaction;
 use FluentCart\Framework\Support\Arr;
 use FluentCart\App\Services\Payments\PaymentInstance;
+use FluentCart\App\Services\PluginInstaller\PaymentAddonManager;
 use FluentCart\App\Modules\PaymentMethods\Core\AbstractPaymentGateway;
 use SslcommerzFluentCart\API\SslcommerzAPI;
 
 class SslcommerzGateway extends AbstractPaymentGateway
 {
     private $methodSlug = 'sslcommerz';
+    private $addonSlug = 'sslcommerz-for-fluent-cart';
+    private $addonFile = 'sslcommerz-for-fluent-cart/sslcommerz-for-fluent-cart.php';
 
     public array $supportedFeatures = [
         'payment',
@@ -38,6 +41,7 @@ class SslcommerzGateway extends AbstractPaymentGateway
     public function meta(): array
     {
         $logo = SSLCOMMERZ_FC_PLUGIN_URL . 'assets/images/sslcommerz-logo.svg';
+        $addonStatus = PaymentAddonManager::getAddonStatus($this->addonSlug, $this->addonFile);
         
         return [
             'title'              => __('SSL Commerz', 'sslcommerz-for-fluent-cart'),
@@ -51,6 +55,15 @@ class SslcommerzGateway extends AbstractPaymentGateway
             'brand_color'        => '#0B9E48',
             'status'             => $this->settings->get('is_active') === 'yes',
             'upcoming'           => false,
+            'is_addon'           => true,
+            'addon_source'       => [
+                'type'         => 'cdn',
+                'link'         => 'https://addons-cdn.fluentcart.com/sslcommerz-for-fluent-cart.zip',
+                'slug'         => $this->addonSlug,
+                'repo_link'    => 'https://fluentcart.com/fluentcart-addons/',
+                'is_installed' => true,
+            ],
+            'addon_status'       => $addonStatus,
             'supported_features' => $this->supportedFeatures,
         ];
     }
@@ -340,13 +353,13 @@ class SslcommerzGateway extends AbstractPaymentGateway
                         'schema' => [
                             'live_store_id' => [
                                 'value'       => '',
-                                'label'       => __('Live Store ID', 'sslcommerz-for-fluent-cart'),
+                                'label'       => __('Live store ID', 'sslcommerz-for-fluent-cart'),
                                 'type'        => 'text',
                                 'placeholder' => __('Your live store ID', 'sslcommerz-for-fluent-cart'),
                             ],
                             'live_store_secret' => [
                                 'value'       => '',
-                                'label'       => __('Live Store Secret Key', 'sslcommerz-for-fluent-cart'),
+                                'label'       => __('Live store secret key', 'sslcommerz-for-fluent-cart'),
                                 'type'        => 'password',
                                 'placeholder' => __('Your live store secret key', 'sslcommerz-for-fluent-cart'),
                             ],
@@ -359,13 +372,13 @@ class SslcommerzGateway extends AbstractPaymentGateway
                         'schema' => [
                             'test_store_id' => [
                                 'value'       => '',
-                                'label'       => __('Test Store ID', 'sslcommerz-for-fluent-cart'),
+                                'label'       => __('Test store ID', 'sslcommerz-for-fluent-cart'),
                                 'type'        => 'text',
                                 'placeholder' => __('Your test store ID', 'sslcommerz-for-fluent-cart'),
                             ],
                             'test_store_secret' => [
                                 'value'       => '',
-                                'label'       => __('Test Store Password', 'sslcommerz-for-fluent-cart'),
+                                'label'       => __('Test store secret key', 'sslcommerz-for-fluent-cart'),
                                 'type'        => 'password',
                                 'placeholder' => __('Your test store password', 'sslcommerz-for-fluent-cart'),
                             ],
@@ -545,4 +558,3 @@ class SslcommerzGateway extends AbstractPaymentGateway
         fluent_cart_api()->registerCustomPaymentMethod('sslcommerz', new self());
     }
 }
-
