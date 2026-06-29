@@ -31,6 +31,9 @@ sslcommerz-for-fluent-cart/
     ├── Onetime/
     │   └── SslcommerzProcessor.php         # One-time payment processor
     │
+    ├── Subscriptions/
+    │   └── SslcommerzManualSubscriptions.php # Manual-invoice subscription module
+    │
     ├── Settings/
     │   └── SslcommerzSettingsBase.php      # Gateway settings management
     │
@@ -120,7 +123,7 @@ https://yourdomain.com/?fluent-cart=fct_payment_listener_ipn&method=sslcommerz
 
 ### ⚠️ Limitations
 
-- **No Subscription Support**: SSL Commerz doesn't support automated recurring billing
+- **No Automated Recurring Charges**: SSL Commerz doesn't support vendor-side recurring billing. Subscriptions are supported via **manual invoices** only (FluentCart generates renewal invoices and each is paid as a one-time SSL Commerz charge).
 - **Manual Refunds**: Refunds must be processed through SSL Commerz dashboard
 
 ## 🎨 Key Differences from Paystack
@@ -129,7 +132,7 @@ https://yourdomain.com/?fluent-cart=fct_payment_listener_ipn&method=sslcommerz
 |---------|----------|-------------|
 | **Credentials** | Public Key + Secret Key | Store ID + Store Password |
 | **Checkout** | Popup only | Hosted or Modal |
-| **Subscriptions** | ✅ Yes | ❌ No |
+| **Subscriptions** | ✅ Yes (remote) | ✅ Manual invoices only (no remote recurring) |
 | **Refunds** | API | Manual via dashboard |
 | **Primary Market** | Nigeria, Ghana, South Africa | Bangladesh |
 | **Validation** | Signature verification | API validation endpoint |

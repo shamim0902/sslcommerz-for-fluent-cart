@@ -7,11 +7,11 @@ A WordPress plugin that integrates SSL Commerz payment gateway with FluentCart.
 - ✅ One-time payments
 - ✅ Hosted checkout (redirect)
 - ✅ Modal checkout (popup)
+- ✅ Manual subscription billing via FluentCart invoices (no automated recurring on SSL Commerz side)
 - ✅ IPN/Webhook integration
 - ✅ Test and Live modes
 - ✅ Multiple currency support (BDT, USD, EUR, GBP, etc.)
 - ✅ Multiple payment methods (Cards, Mobile Banking, Internet Banking)
-- ⚠️ No subscription support (SSL Commerz limitation)
 
 ## Installation
 
@@ -73,6 +73,8 @@ sslcommerz-for-fluent-cart/
 │   │   └── SslcommerzWebhook.php     # Webhook/IPN handler
 │   ├── Onetime/
 │   │   └── SslcommerzProcessor.php   # Payment processor
+│   ├── Subscriptions/
+│   │   └── SslcommerzManualSubscriptions.php # Manual-invoice subscription module
 │   ├── Settings/
 │   │   └── SslcommerzSettingsBase.php  # Settings management
 │   └── Confirmations/
@@ -136,7 +138,13 @@ SSL Commerz refunds must be processed manually through the SSL Commerz merchant 
 
 ### Subscriptions
 
-SSL Commerz does not support automated recurring billing. This plugin only supports one-time payments.
+SSL Commerz does not support automated recurring billing. This plugin supports **manual subscriptions** by:
+
+- Creating FluentCart subscriptions with `collection_method = manual` when paid via SSL Commerz.
+- Letting FluentCart's invoice scheduler generate renewal invoices for each billing cycle.
+- Charging each renewal invoice as a normal one-time SSL Commerz payment.
+
+Customers must pay each invoice manually; SSL Commerz never auto-charges on your behalf.
 
 ## Troubleshooting
 

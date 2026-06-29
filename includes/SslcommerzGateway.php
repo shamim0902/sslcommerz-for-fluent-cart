@@ -5,10 +5,11 @@ namespace SslcommerzFluentCart;
 use FluentCart\Api\CurrencySettings;
 use FluentCart\App\Helpers\Helper;
 use FluentCart\App\Models\OrderTransaction;
+use FluentCart\App\Modules\PaymentMethods\Core\AbstractPaymentGateway;
 use FluentCart\Framework\Support\Arr;
 use FluentCart\App\Services\Payments\PaymentInstance;
-use FluentCart\App\Modules\PaymentMethods\Core\AbstractPaymentGateway;
 use SslcommerzFluentCart\API\SslcommerzAPI;
+use SslcommerzFluentCart\Subscriptions\SslcommerzManualSubscriptions;
 
 class SslcommerzGateway extends AbstractPaymentGateway
 {
@@ -17,14 +18,15 @@ class SslcommerzGateway extends AbstractPaymentGateway
     public array $supportedFeatures = [
         'payment',
         'refund',
-        'webhook'
+        'webhook',
+        'subscriptions',
     ];
 
     public function __construct()
     {
         parent::__construct(
-            new Settings\SslcommerzSettingsBase(), 
-            null // No subscription support
+            new Settings\SslcommerzSettingsBase(),
+            new SslcommerzManualSubscriptions()
         );
 
         add_filter('fluent_cart/payment_methods_with_custom_checkout_buttons', function ($methods) {
@@ -33,6 +35,17 @@ class SslcommerzGateway extends AbstractPaymentGateway
             }
             return $methods;
         });
+    }
+
+    /**
+     * For SSLCommerz subscriptions we use manual collection.
+     *
+     * Each renewal is invoiced by FluentCart and charged via a normal
+     * one-time SSLCommerz payment when the invoice is paid.
+     */
+    public function getSubscriptionCollectionMethod(): string
+    {
+        return 'manual';
     }
 
     public function meta(): array
