@@ -194,8 +194,6 @@ class SslcommerzProcessor
             }
         }
 
-   
-
         return __('No specific Category', 'sslcommerz-for-fluent-cart');
     }
 }

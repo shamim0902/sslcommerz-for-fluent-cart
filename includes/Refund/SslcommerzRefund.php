@@ -47,12 +47,13 @@ class SslcommerzRefund
             }
 
             if (!$refund->vendor_charge_id) { // This is a local refund without vendor charge id
-                $refundSslcommerzId = Arr::get($refund->meta, 'sslcommerz_refund_id', '');
-                $isRefundMatched = $refundSslcommerzId == $currentRefundVendorId;
+                $refundParentId = Arr::get($refund->meta, 'parent_id', '');
+                $isTransactionMatched = $refundParentId == $parentTransaction->id;
 
                 // This is a local refund without vendor charge id, we will update it
-                if ($refund->total == $refundData['total'] && $isRefundMatched) {
+                if ($refund->total == $refundData['total'] && $isTransactionMatched) {
                     $existingLocalRefund = $refund;
+                    break;
                 }
             }
         }
@@ -60,7 +61,6 @@ class SslcommerzRefund
         if ($existingLocalRefund) {
             $existingLocalRefund->fill($refundData);
             $existingLocalRefund->save();
-            PaymentHelper::updateTransactionRefundedTotal($parentTransaction, $existingLocalRefund->total);
             return $existingLocalRefund;
         }
 
