@@ -62,15 +62,12 @@ class SslcommerzCheckout {
 
         // Show payment info
         const infoDiv = document.createElement('div');
-        infoDiv.style.cssText = `
-            padding: 15px;
-            background: #f9f9f9;
-            border: 1px solid #e0e0e0;
-            border-radius: 6px;
-            text-align: center;
-            color: #666;
-        `;
-        infoDiv.textContent = this.$t('You will be redirected to SSLCommerz to complete your payment');
+        infoDiv.className = 'sslcommerz-hosted-checkout-info';
+        infoDiv.style.cssText = 'padding: 15px; background: #f8f9fa; border-radius: 4px; margin: 10px 0;';
+        const infoText = document.createElement('p');
+        infoText.style.cssText = 'margin: 0; color: #495057; font-size: 14px; text-align: center;';
+        infoText.textContent = this.$t('You will be redirected to SSLCommerz to complete your payment');
+        infoDiv.appendChild(infoText);
         container.appendChild(infoDiv);
 
         // Listen for next action event
