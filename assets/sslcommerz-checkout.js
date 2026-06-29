@@ -8,7 +8,6 @@ class SslcommerzCheckout {
         this.paymentLoader = paymentLoader;
         this.currentOrderData = null;
         this.$t = this.translate.bind(this);
-        this.embedScriptLoaded = false;
         this.submitButton = window.fluentcart_checkout_vars?.submit_button;
     }
 
@@ -190,43 +189,107 @@ class SslcommerzCheckout {
         }, { once: false }); // Allow multiple triggers
     }
 
-    async handleModalCheckout(sslcommerzData, remoteResponse) {
-        try {
-            const checkoutUrl = sslcommerzData.checkout_url;
-            const transactionHash = sslcommerzData.transaction_hash;
-            const orderHash = sslcommerzData.order_hash;
-            const paymentMode = sslcommerzData.payment_mode || 'test';
+    handleModalCheckout(sslcommerzData) {
+        const checkoutUrl = sslcommerzData.checkout_url;
+        const transactionHash = sslcommerzData.transaction_hash;
+        const orderHash = sslcommerzData.order_hash;
+        const paymentMode = sslcommerzData.payment_mode || 'test';
 
-            if (!checkoutUrl) {
-                throw new Error(this.$t('SSLCommerz checkout URL not found'));
-            }
-
-            // Load the SSLCommerz embed script
-            await this.loadEmbedScript(paymentMode);
-
-            this.paymentLoader.hideLoader();
-
-            // Setup the modal button (required by SSLCommerz embed script)
-            this.setupModalButton(sslcommerzData, transactionHash, orderHash);
-
-            // Auto-click the button after a short delay
-            setTimeout(() => {
-                const btn = document.getElementById('sslczPayBtn');
-                if (btn && !btn.disabled) {
-                    btn.click();
-                }
-            }, 10);
-
-        } catch (error) {
-        
-            // Fallback to redirect if modal fails
-            if (sslcommerzData.checkout_url) {
-                this.paymentLoader?.changeLoaderStatus(this.$t('Redirecting to payment gateway...'));
-                window.location.href = sslcommerzData.checkout_url;
-            } else {
-                this.handleError(error);
-            }
+        if (!checkoutUrl) {
+            this.handleError(new Error(this.$t('SSLCommerz checkout URL not found')));
+            return;
         }
+
+        // Render the modal with SSL Commerz's own embed SDK. It owns the iframe, the framing
+        // (it appends ?full=1 and names the frame "frame" internally), the postMessage navigation
+        // for OTP / bank / completion, and the popup UI — so we don't reproduce any of that.
+        this.loadEmbedScript(paymentMode)
+            .then(() => {
+                this.paymentLoader?.hideLoader();
+                this.setupSslczButton(transactionHash, orderHash);
+                // The SDK binds to #sslczPayBtn via event delegation; trigger it to open the modal.
+                setTimeout(() => {
+                    const btn = document.getElementById('sslczPayBtn');
+                    if (btn) {
+                        btn.click();
+                    }
+                }, 50);
+            })
+            .catch((error) => {
+                this.handleError(error);
+            });
+    }
+
+    // Load SSL Commerz's embed SDK once (shared across checkout instances).
+    loadEmbedScript(mode) {
+        return new Promise((resolve, reject) => {
+            if (window.__sslcommerzEmbedLoaded) {
+                resolve();
+                return;
+            }
+
+            const existing = document.getElementById('sslcommerz-embed-sdk');
+            if (existing) {
+                existing.addEventListener('load', () => resolve());
+                existing.addEventListener('error', () => reject(new Error(this.$t('Failed to load SSLCommerz script'))));
+                return;
+            }
+
+            const embedUrl = (mode === 'live')
+                ? 'https://seamless-epay.sslcommerz.com/embed.min.js'
+                : 'https://sandbox.sslcommerz.com/embed.min.js';
+
+            const script = document.createElement('script');
+            script.id = 'sslcommerz-embed-sdk';
+            script.src = embedUrl;
+            script.async = true;
+            script.onload = () => {
+                window.__sslcommerzEmbedLoaded = true;
+                resolve();
+            };
+            script.onerror = () => reject(new Error(this.$t('Failed to load SSLCommerz script')));
+            document.head.appendChild(script);
+        });
+    }
+
+    // Build the button the SSL Commerz SDK looks for (#sslczPayBtn). The SDK reads its `endpoint`
+    // and `order` attributes, POSTs to the endpoint to fetch the GatewayPageURL, then opens its
+    // own modal. Our endpoint (sslcommerz_init_modal) returns the already-created session URL.
+    setupSslczButton(transactionHash, orderHash) {
+        const container = document.querySelector('.fluent-cart-checkout_embed_payment_container_sslcommerz');
+        if (!container) {
+            return;
+        }
+
+        let endpoint = window.fluentcart_checkout_vars?.ajaxurl || window.ajaxurl || '/wp-admin/admin-ajax.php';
+        endpoint += (endpoint.indexOf('?') > -1 ? '&' : '?') + 'action=sslcommerz_init_modal';
+        if (transactionHash) {
+            endpoint += '&transaction_hash=' + encodeURIComponent(transactionHash);
+        }
+        if (orderHash) {
+            endpoint += '&order_hash=' + encodeURIComponent(orderHash);
+        }
+
+        container.innerHTML = '';
+
+        const button = document.createElement('button');
+        button.id = 'sslczPayBtn';          // REQUIRED: the SDK binds to this id.
+        button.type = 'button';
+        button.setAttribute('endpoint', endpoint);
+        if (transactionHash) {
+            button.setAttribute('order', transactionHash);   // REQUIRED non-empty by the SDK.
+        }
+        if (window.fluentCartRestVars?.rest?.nonce) {
+            button.setAttribute('token', window.fluentCartRestVars.rest.nonce);
+        }
+
+        button.textContent = this.data?.payment_args?.modal_checkout_button_text || this.$t('Pay Now');
+        button.style.cssText = 'width:100%;padding:12px 24px;background:' +
+            (this.data?.payment_args?.modal_checkout_button_color || '#0B9E48') + ';color:' +
+            (this.data?.payment_args?.modal_checkout_button_text_color || '#fff') +
+            ';border:none;border-radius:6px;font-size:16px;font-weight:600;cursor:pointer;';
+
+        container.appendChild(button);
     }
 
     handleHostedCheckout(sslcommerzData) {
@@ -243,101 +306,6 @@ class SslcommerzCheckout {
         // Redirect to hosted checkout
         this.paymentLoader?.changeLoaderStatus(this.$t('Redirecting to payment gateway...'));
         window.location.href = checkoutUrl;
-    }
-
-    loadEmbedScript(mode) {
-        return new Promise((resolve, reject) => {
-            if (this.embedScriptLoaded || window.SSLCommerz) {
-                resolve();
-                return;
-            }
-
-            const paymentMode = mode || 'test';
-            const embedUrl = paymentMode === 'live'
-                ? 'https://seamless-epay.sslcommerz.com/embed.min.js'
-                : 'https://sandbox.sslcommerz.com/embed.min.js';
-
-            const script = document.createElement('script');
-            script.src = embedUrl + '?' + Math.random().toString(36).substring(7);
-            script.async = true;
-
-            script.onload = () => {
-                this.embedScriptLoaded = true;
-                resolve();
-            };
-
-            script.onerror = () => {
-                reject(new Error(this.$t('Failed to load SSLCommerz script')));
-            };
-
-            document.head.appendChild(script);
-        });
-    }
-
-    setupModalButton(sslcommerzData, transactionHash, orderHash) {
-        const container = document.querySelector('.fluent-cart-checkout_embed_payment_container_sslcommerz');
-        
-        if (!container) {
-            console.error('SSLCommerz container not found');
-            return false;
-        }
-
-        // Build endpoint URL
-        let endpoint = window.fluentcart_checkout_vars?.ajaxurl || window.ajaxurl || '/wp-admin/admin-ajax.php';
-        
-        // Add action parameter
-        endpoint += endpoint.indexOf('?') > -1 ? '&' : '?';
-        endpoint += 'action=sslcommerz_init_modal';
-
-        // Add transaction_id and order_hash to endpoint
-        const params = [];
-        if (transactionHash) {
-            params.push('transaction_hash=' + encodeURIComponent(transactionHash));
-        }
-        if (orderHash) {
-            params.push('order_hash=' + encodeURIComponent(orderHash));
-        }
-        if (params.length) {
-            endpoint += '&' + params.join('&');
-        }
-
-        // Clear container and add button
-        container.innerHTML = '';
-        
-        const button = document.createElement('button');
-        button.id = 'sslczPayBtn'; // REQUIRED: SSL Commerz embed script looks for this ID
-        button.className = 'sslcz-payment-btn';
-        button.type = 'button';
-        button.setAttribute('endpoint', endpoint);
-        
-        if (transactionId) {
-            button.setAttribute('order', transactionId);
-        }
-        
-        button.textContent = this.$t(this.submitButton?.text || 'Pay Now');
-        button.style.cssText = `
-            width: 100%;
-            padding: 12px 24px;
-            background: #0B9E48;
-            color: #fff;
-            border: none;
-            border-radius: 6px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-        `;
-        
-        // Add nonce if available
-        if (window.fluentCartRestVars?.rest?.nonce) {
-            button.setAttribute('token', window.fluentCartRestVars.rest.nonce);
-        }
-
-        // Append button to DOM
-        container.appendChild(button);
-        container.style.display = 'block';
-        button.style.display = 'block';
-
-        return true;
     }
 
     handleError(error) {
@@ -379,6 +347,9 @@ class SslcommerzCheckout {
         container.appendChild(errorDiv);
     }
 }
+
+// Version marker — confirm the browser is running the latest (non-cached) script.
+console.log('[SSLCommerz for FluentCart] checkout handler loaded — embed-sdk build 3');
 
 // Listen for initial payment load event
 window.addEventListener('fluent_cart_load_payments_sslcommerz', function (e) {

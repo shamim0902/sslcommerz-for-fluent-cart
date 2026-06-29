@@ -99,16 +99,17 @@ class SslcommerzProcessor
         }
 
         $sessionKey = Arr::get($response, 'sessionkey');
-        if ($sessionKey) {
-            $transaction->update([
-                'meta' => array_merge($transaction->meta ?? [], [
-                    'sslcommerz_session_key' => $sessionKey
-                ])
-            ]);
-        }
+        $storeLogo  = Arr::get($response, 'storeLogo', '');
 
-
-        $storeLogo = Arr::get($response, 'storeLogo', '');
+        // Persist the session URL so a modal checkout can reuse it instead of initiating a
+        // second SSL Commerz session for the same transaction.
+        $transaction->update([
+            'meta' => array_merge($transaction->meta ?? [], [
+                'sslcommerz_session_key' => $sessionKey,
+                'sslcommerz_gateway_url' => $gatewayUrl,
+                'sslcommerz_store_logo'  => $storeLogo,
+            ])
+        ]);
 
         $checkoutType = (new SslcommerzSettingsBase())->get('checkout_type');
         $mode = (new SslcommerzSettingsBase())->getMode();

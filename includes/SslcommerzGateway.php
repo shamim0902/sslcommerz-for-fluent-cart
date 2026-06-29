@@ -139,11 +139,16 @@ class SslcommerzGateway extends AbstractPaymentGateway
 
     public function getEnqueueScriptSrc($hasSubscription = 'no'): array
     {
+        // Bust the browser cache whenever the script file actually changes, so updates ship
+        // reliably between plugin version bumps. Falls back to the plugin version.
+        $scriptPath = SSLCOMMERZ_FC_PLUGIN_DIR . 'assets/sslcommerz-checkout.js';
+        $version = file_exists($scriptPath) ? (string) filemtime($scriptPath) : SSLCOMMERZ_FC_VERSION;
+
         return [
             [
                 'handle' => 'sslcommerz-fluent-cart-checkout-handler',
                 'src'    => SSLCOMMERZ_FC_PLUGIN_URL . 'assets/sslcommerz-checkout.js',
-                'version' => SSLCOMMERZ_FC_VERSION
+                'version' => $version
             ]
         ];
     }
@@ -479,13 +484,15 @@ class SslcommerzGateway extends AbstractPaymentGateway
      */
     public function initModalPayment()
     {
-        // Get order hash or transaction ID from request.
+        // The SSL Commerz embed script POSTs `order` (our transaction uuid), and the endpoint
+        // URL carries transaction_hash/order_hash. The transaction is identified by its UUID,
+        // not its numeric id — read all of them so the lookup is robust.
         // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Public checkout AJAX used before an order is finalized; it only looks up an existing order/transaction by UUID and starts a gateway session, performing no privileged state change.
-        $orderHash = Arr::get($_REQUEST, 'order_hash', '');
+        $orderHash = sanitize_text_field(Arr::get($_REQUEST, 'order_hash', ''));
         // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- See note above.
-        $transactionId = Arr::get($_REQUEST, 'transaction_id', '');
-        
-        if (!$orderHash && !$transactionId) {
+        $transactionHash = sanitize_text_field(Arr::get($_REQUEST, 'transaction_hash', Arr::get($_REQUEST, 'order', '')));
+
+        if (!$orderHash && !$transactionHash) {
             wp_send_json([
                 'status' => 'fail',
                 'data' => null,
@@ -497,21 +504,31 @@ class SslcommerzGateway extends AbstractPaymentGateway
         $order = null;
         $transaction = null;
 
-        if ($orderHash) {
+        if ($transactionHash) {
+            $transaction = OrderTransaction::query()
+                ->where('uuid', $transactionHash)
+                ->where('payment_method', 'sslcommerz')
+                ->first();
+
+            if ($transaction) {
+                $order = $transaction->order;
+            }
+        }
+
+        if (!$order && $orderHash) {
             $order = \FluentCart\App\Models\Order::query()
                 ->where('uuid', $orderHash)
                 ->first();
         }
 
-        if ($transactionId) {
+        // If the order resolved but the transaction did not, fall back to the order's
+        // most recent SSL Commerz transaction.
+        if ($order && !$transaction) {
             $transaction = OrderTransaction::query()
-                ->where('id', $transactionId)
+                ->where('order_id', $order->id)
                 ->where('payment_method', 'sslcommerz')
+                ->orderBy('id', 'DESC')
                 ->first();
-            
-            if ($transaction && !$order) {
-                $order = $transaction->order;
-            }
         }
 
         if (!$order || !$transaction) {
@@ -522,7 +539,20 @@ class SslcommerzGateway extends AbstractPaymentGateway
             ]);
         }
 
-        // Use the processor to initiate payment
+        // Reuse the session created when the order was placed (moments earlier in the same
+        // checkout click) instead of initiating a second SSL Commerz session. Only reuse while
+        // the transaction is still awaiting payment.
+        $storedUrl = Arr::get($transaction->meta, 'sslcommerz_gateway_url', '');
+
+        if ($storedUrl && $transaction->status !== \FluentCart\App\Helpers\Status::TRANSACTION_SUCCEEDED) {
+            wp_send_json([
+                'status' => 'success',
+                'data'   => $storedUrl,
+                'logo'   => Arr::get($transaction->meta, 'sslcommerz_store_logo', ''),
+            ]);
+        }
+
+        // Fallback: no stored session, so initiate one now.
         $paymentInstance = new \FluentCart\App\Services\Payments\PaymentInstance($order);
         $paymentInstance->setTransaction($transaction);
         
