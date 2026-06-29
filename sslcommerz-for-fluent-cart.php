@@ -9,7 +9,7 @@
  * Text Domain: sslcommerz-for-fluent-cart
  * Domain Path: /languages
  * Requires at least: 5.6
- * Tested up to: 6.9
+ * Tested up to: 7.0
  * Requires PHP: 7.4
  * License: GPLv2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -91,31 +91,30 @@ add_action('plugins_loaded', function () {
         \SslcommerzFluentCart\SslcommerzGateway::register();
     }, 10);
 
-    if (defined('FLUENTCART_PRO_PLUGIN_VERSION')) {
-        new \SslcommerzFluentCart\PluginManager\Updater('https://fluentcart.com/', SSLCOMMERZ_FC_PLUGIN_FILE, [
-            'version'           => SSLCOMMERZ_FC_VERSION,
-            'addon_slug'        => 'sslcommerz-for-fluent-cart',
-            'parent_product_id' => 21480,
-            'plugin_title'      => 'SSLCommerz for FluentCart',
+    new \SslcommerzFluentCart\PluginManager\Updater('https://fluentcart.com/', SSLCOMMERZ_FC_PLUGIN_FILE, [
+        'version'           => SSLCOMMERZ_FC_VERSION,
+        'addon_slug'        => 'sslcommerz-for-fluent-cart',
+        'parent_product_id' => 21480,
+        'plugin_title'      => 'SSLCommerz for FluentCart',
+        'is_free'           => true,
+    ]);
+
+    add_filter('plugin_row_meta', function ($links, $pluginFile) {
+        if (plugin_basename(SSLCOMMERZ_FC_PLUGIN_FILE) !== $pluginFile) {
+            return $links;
+        }
+
+        $checkUpdateUrl = esc_url(
+            wp_nonce_url(
+                admin_url('plugins.php?sslcommerz-for-fluent-cart-check-update=' . time()),
+                'sslcommerz-for-fluent-cart-check-update'
+            )
+        );
+
+        return array_merge($links, [
+            'check_update' => '<a style="color: #583fad;font-weight: 600;" href="' . $checkUpdateUrl . '" aria-label="' . esc_attr__('Check Update', 'sslcommerz-for-fluent-cart') . '">' . esc_html__('Check Update', 'sslcommerz-for-fluent-cart') . '</a>',
         ]);
-
-        add_filter('plugin_row_meta', function ($links, $pluginFile) {
-            if (plugin_basename(SSLCOMMERZ_FC_PLUGIN_FILE) !== $pluginFile) {
-                return $links;
-            }
-
-            $checkUpdateUrl = esc_url(
-                wp_nonce_url(
-                    admin_url('plugins.php?sslcommerz-for-fluent-cart-check-update=' . time()),
-                    'sslcommerz-for-fluent-cart-check-update'
-                )
-            );
-
-            return array_merge($links, [
-                'check_update' => '<a style="color: #583fad;font-weight: 600;" href="' . $checkUpdateUrl . '" aria-label="' . esc_attr__('Check Update', 'sslcommerz-for-fluent-cart') . '">' . esc_html__('Check Update', 'sslcommerz-for-fluent-cart') . '</a>',
-            ]);
-        }, 10, 2);
-    }
+    }, 10, 2);
 
 }, 20);
 

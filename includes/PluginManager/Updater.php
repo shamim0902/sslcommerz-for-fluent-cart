@@ -17,10 +17,26 @@ class Updater
     private $license_key = '';
     private $activation_hash = '';
     private $plugin_title = '';
+    private $is_free = false;
 
     private $response_transient_key;
     private $license_notice_transient_key;
 
+    /**
+     * @param string $_store_url   The FluentCart store URL.
+     * @param string $_plugin_file Path to the plugin file.
+     * @param array  $_config      Configuration:
+     *   - version           (string) Current addon version
+     *   - addon_slug        (string) Must match the slug in Addon Assets settings on the store
+     *   - parent_product_id (int)    FluentCart product ID on the store
+     *   - license_key       (string) Optional, auto-detected from FluentCart Pro if empty
+     *   - activation_hash   (string) Optional, auto-detected from FluentCart Pro if empty
+     *   - plugin_title      (string) Display name for update notices
+     *   - is_free           (bool)   When true, the updater never reads or sends a
+     *                                FluentCart Pro license and never shows a license
+     *                                activation notice. Updates are served by the store's
+     *                                free (verify_license = false) addon asset flow.
+     */
     public function __construct($_store_url, $_plugin_file, $_config = [])
     {
         $this->store_url = rtrim($_store_url, '/');
@@ -36,6 +52,7 @@ class Updater
         $this->license_key = $_config['license_key'] ?? '';
         $this->activation_hash = $_config['activation_hash'] ?? '';
         $this->plugin_title = $_config['plugin_title'] ?? '';
+        $this->is_free = !empty($_config['is_free']);
 
         $this->init();
     }
@@ -50,7 +67,12 @@ class Updater
 
         remove_action('after_plugin_row_' . $this->name, 'wp_plugin_update_row');
         add_action('after_plugin_row_' . $this->name, [$this, 'showUpdateNotification'], 10, 2);
-        add_action('admin_notices', [$this, 'showLicenseActivationNotice']);
+
+        // Free addons update without a license, so the license activation notice
+        // is never registered.
+        if (!$this->is_free) {
+            add_action('admin_notices', [$this, 'showLicenseActivationNotice']);
+        }
     }
 
     public function checkUpdate($_transient_data)
@@ -192,13 +214,21 @@ class Updater
         }
 
         $siteUrl = is_multisite() ? network_site_url() : home_url();
-        $licenseKey = $this->license_key;
-        $activationHash = $this->activation_hash;
 
-        if (!$licenseKey && !$activationHash) {
-            $stored = $this->getParentLicenseInfo();
-            $licenseKey = $stored['license_key'];
-            $activationHash = $stored['activation_hash'];
+        $licenseKey = '';
+        $activationHash = '';
+
+        // Free addons never depend on a FluentCart Pro license. Only resolve and
+        // send license data for paid addons.
+        if (!$this->is_free) {
+            $licenseKey = $this->license_key;
+            $activationHash = $this->activation_hash;
+
+            if (!$licenseKey && !$activationHash) {
+                $stored = $this->getParentLicenseInfo();
+                $licenseKey = $stored['license_key'];
+                $activationHash = $stored['activation_hash'];
+            }
         }
 
         $request = wp_remote_post(add_query_arg(['fluent-cart' => 'get_license_version'], $this->store_url), [
@@ -220,13 +250,16 @@ class Updater
 
         $request = json_decode(wp_remote_retrieve_body($request));
 
-        if ($request && isset($request->license_status) && $request->license_status !== 'valid') {
-            $this->setTransient($this->license_notice_transient_key, [
-                'status'  => sanitize_text_field($request->license_status),
-                'message' => sanitize_text_field($request->license_message ?? ''),
-            ]);
-        } else {
-            $this->deleteTransient($this->license_notice_transient_key);
+        // A free addon never surfaces a license activation notice.
+        if (!$this->is_free) {
+            if ($request && isset($request->license_status) && $request->license_status !== 'valid') {
+                $this->setTransient($this->license_notice_transient_key, [
+                    'status'  => sanitize_text_field($request->license_status),
+                    'message' => sanitize_text_field($request->license_message ?? ''),
+                ]);
+            } else {
+                $this->deleteTransient($this->license_notice_transient_key);
+            }
         }
 
         if ($request && isset($request->sections)) {
@@ -267,6 +300,11 @@ class Updater
 
     public function showLicenseActivationNotice()
     {
+        // Free addons do not require a license, so no activation notice is shown.
+        if ($this->is_free) {
+            return;
+        }
+
         global $pagenow;
 
         if (!in_array($pagenow, ['plugins.php', 'update-core.php'], true)) {
@@ -285,8 +323,8 @@ class Updater
         $activateUrl = admin_url('admin.php?page=fluent-cart#/settings/licensing');
         $pluginTitle = $this->plugin_title ?: $this->slug;
 
+        /* translators: %1$s: Plugin title such as SSLCommerz for FluentCart */
         $message = sprintf(
-            // translators: %1$s: Plugin title (e.g. "SSLCommerz for FluentCart").
             __('%1$s updates require an active FluentCart Pro license. Please activate your FluentCart Pro license to receive updates.', 'sslcommerz-for-fluent-cart'),
             esc_html($pluginTitle)
         );
