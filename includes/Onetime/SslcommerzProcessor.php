@@ -7,6 +7,8 @@ use FluentCart\Framework\Support\Arr;
 use SslcommerzFluentCart\API\SslcommerzAPI;
 use SslcommerzFluentCart\Settings\SslcommerzSettingsBase;
 
+defined('ABSPATH') || exit;
+
 class SslcommerzProcessor
 {
     /**
@@ -20,7 +22,10 @@ class SslcommerzProcessor
         $fcCustomer = $paymentInstance->order->customer;
         $billingAddress = $paymentInstance->order->billing_address;
 
-        $this->checkCurrencySupport($transaction->currency);
+        $currencyError = $this->checkCurrencySupport($transaction->currency);
+        if (is_wp_error($currencyError)) {
+            return $currencyError;
+        }
 
         $settings = new SslcommerzSettingsBase();
         $keys = $settings->getApiKeys();
@@ -170,7 +175,9 @@ class SslcommerzProcessor
 
     public static function getSslcommerzSupportedCurrency(): array
     {
-        return ['BDT', 'USD', 'EUR', 'GBP', 'AUD', 'CAD'];
+        // Single source of truth lives on the gateway so the pre-checkout currency gate and
+        // the payment-time gate never diverge.
+        return \SslcommerzFluentCart\SslcommerzGateway::getSslcommerzSupportedCurrency();
     }
 
 

@@ -286,6 +286,7 @@ class Updater
         $pluginTitle = $this->plugin_title ?: $this->slug;
 
         $message = sprintf(
+            // translators: %1$s: Plugin title (e.g. "SSLCommerz for FluentCart").
             __('%1$s updates require an active FluentCart Pro license. Please activate your FluentCart Pro license to receive updates.', 'sslcommerz-for-fluent-cart'),
             esc_html($pluginTitle)
         );
@@ -344,7 +345,7 @@ class Updater
 
             add_filter('pre_set_site_transient_update_plugins', [$this, 'checkUpdate']);
 
-            wp_redirect(admin_url('plugins.php?s=' . rawurlencode($this->slug) . '&plugin_status=all'));
+            wp_safe_redirect(admin_url('plugins.php?s=' . rawurlencode($this->slug) . '&plugin_status=all'));
             exit();
         }
     }

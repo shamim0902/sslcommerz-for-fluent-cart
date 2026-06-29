@@ -11,6 +11,8 @@ use FluentCart\App\Services\PluginInstaller\PaymentAddonManager;
 use FluentCart\App\Modules\PaymentMethods\Core\AbstractPaymentGateway;
 use SslcommerzFluentCart\API\SslcommerzAPI;
 
+defined('ABSPATH') || exit;
+
 class SslcommerzGateway extends AbstractPaymentGateway
 {
     private $methodSlug = 'sslcommerz';
@@ -458,12 +460,14 @@ class SslcommerzGateway extends AbstractPaymentGateway
 
     public static function beforeSettingsUpdate($data, $oldSettings): array
     {
-        $mode = Arr::get($data, 'payment_mode', 'test');
-
-        if ($mode == 'test') {
-            $data['test_store_secret'] = Helper::encryptKey($data['test_store_secret']);
-        } else {
-            $data['live_store_secret'] = Helper::encryptKey($data['live_store_secret']);
+        // Encrypt both secrets independently of the active mode. The store can run in
+        // either mode at any time, and getStorePassword() always decrypts, so leaving
+        // the inactive mode's secret in plaintext both leaks it at rest and breaks
+        // payments when the store is switched to that mode.
+        foreach (['test_store_secret', 'live_store_secret'] as $field) {
+            if (!empty($data[$field])) {
+                $data[$field] = Helper::encryptKey($data[$field]);
+            }
         }
 
         return $data;
@@ -475,8 +479,10 @@ class SslcommerzGateway extends AbstractPaymentGateway
      */
     public function initModalPayment()
     {
-        // Get order hash or transaction ID from request
+        // Get order hash or transaction ID from request.
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Public checkout AJAX used before an order is finalized; it only looks up an existing order/transaction by UUID and starts a gateway session, performing no privileged state change.
         $orderHash = Arr::get($_REQUEST, 'order_hash', '');
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- See note above.
         $transactionId = Arr::get($_REQUEST, 'transaction_id', '');
         
         if (!$orderHash && !$transactionId) {

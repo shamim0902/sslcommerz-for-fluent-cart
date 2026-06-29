@@ -6,6 +6,8 @@ use FluentCart\Api\StoreSettings;
 use FluentCart\App\Helpers\Helper;
 use FluentCart\App\Modules\PaymentMethods\Core\BaseGatewaySettings;
 
+defined('ABSPATH') || exit;
+
 class SslcommerzSettingsBase extends BaseGatewaySettings
 {
     public $settings;

@@ -9,6 +9,8 @@ use FluentCart\Framework\Support\Arr;
 use SslcommerzFluentCart\API\SslcommerzAPI;
 use SslcommerzFluentCart\Settings\SslcommerzSettingsBase;
 
+defined('ABSPATH') || exit;
+
 class SslcommerzConfirmations
 {
     public function init()
@@ -30,8 +32,10 @@ class SslcommerzConfirmations
 
         $transactionHash = Arr::get($data, 'trx_hash', '');
 
-        // Check if payment was successful from SSL Commerz redirect
+        // Check if payment was successful from SSL Commerz redirect.
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- Gateway redirect-back has no WP nonce; the payment is confirmed by re-validating val_id against the SSL Commerz API and binding it to this transaction's id/amount below.
         $status = Arr::get($_POST, 'status');
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- See note above.
         $valId = Arr::get($_POST, 'val_id');
 
         if (!$status || !$transactionHash) {
@@ -74,8 +78,33 @@ class SslcommerzConfirmations
         }
 
         $status = Arr::get($vendorTransaction, 'status');
-        
+
         if ($status !== 'VALID' && $status !== 'VALIDATED') {
+            return;
+        }
+
+        // Security: bind the validated payment to THIS transaction. The redirect POST
+        // (status/val_id) is browser-supplied and forgeable, so confirm that the val_id
+        // we validated actually belongs to this transaction and matches the expected amount.
+        $validationTranId = Arr::get($vendorTransaction, 'tran_id');
+        if ($validationTranId != $transaction->uuid) {
+            fluent_cart_add_log('SSL Commerz Confirmation Rejected', 'Transaction ID mismatch on return. Expected: ' . $transaction->uuid . ' Got: ' . $validationTranId, 'error', [
+                'module_name' => 'order',
+                'module_id'   => $transaction->order_id,
+            ]);
+            return;
+        }
+
+        $validatedTotal = $this->convertToCents(
+            Arr::get($vendorTransaction, 'currency_amount', 0),
+            Arr::get($vendorTransaction, 'currency_type')
+        );
+
+        if (abs($transaction->total - $validatedTotal) > 1) {
+            fluent_cart_add_log('SSL Commerz Confirmation Rejected', 'Amount mismatch on return. Expected: ' . $transaction->total . ' Got: ' . $validatedTotal, 'error', [
+                'module_name' => 'order',
+                'module_id'   => $transaction->order_id,
+            ]);
             return;
         }
 
@@ -95,7 +124,18 @@ class SslcommerzConfirmations
             $updateData['card_last_4'] = substr($cardNo, -4);
         }
 
-        $transaction->update($updateData);
+        // Atomic guard: the IPN may confirm the same transaction concurrently. The WHERE
+        // clause ensures exactly one path performs the success transition and the order sync.
+        $marked = (bool) OrderTransaction::query()
+            ->where('id', $transaction->id)
+            ->where('status', '!=', Status::TRANSACTION_SUCCEEDED)
+            ->update($updateData);
+
+        if (!$marked) {
+            return;
+        }
+
+        $transaction->fill($updateData);
 
         // Sync order status
         if ($transaction->order) {

@@ -12,6 +12,8 @@ use SslcommerzFluentCart\API\SslcommerzAPI;
 use SslcommerzFluentCart\Settings\SslcommerzSettingsBase;
 use SslcommerzFluentCart\Refund\SslcommerzRefund;
 
+defined('ABSPATH') || exit;
+
 class SslcommerzWebhook
 {
     public function init()
@@ -25,9 +27,7 @@ class SslcommerzWebhook
      */
     public function verifyAndProcess()
     {
-
-        $data = json_decode(file_get_contents('php://input'), true);
-
+        $data = $this->getRequestData();
 
         if (!is_array($data)) {
             $this->sendErrorResponse('Invalid data');
@@ -48,7 +48,7 @@ class SslcommerzWebhook
             http_response_code(200);
             exit('SSL Commerz IPN endpoint is active');
         }
-        
+
 
         if (!$valId || !$tranId || !$status) {
             fluent_cart_add_log('SSL Commerz IPN Error', 'Missing required parameters (val_id, tran_id, or status)', 'error', [
@@ -60,6 +60,18 @@ class SslcommerzWebhook
             ]);
             http_response_code(400);
             exit('Missing required parameters');
+        }
+
+        // Authenticate the IPN via the signature SSL Commerz includes (verify_sign/verify_key).
+        // When present it must be valid; this proves the request genuinely came from SSL Commerz
+        // before we act on any of its data. The server-to-server validation below remains the
+        // authoritative check for status and amount.
+        if (Arr::get($data, 'verify_sign') && !$this->verifyIpnSignature($data)) {
+            fluent_cart_add_log('SSL Commerz IPN Error', 'IPN signature verification failed', 'error', [
+                'tran_id' => $tranId,
+                'val_id'  => $valId,
+            ]);
+            $this->sendErrorResponse('Signature verification failed');
         }
 
         // Find the transaction in our database first (security check)
@@ -128,22 +140,84 @@ class SslcommerzWebhook
     }
 
     /**
+     * Read the IPN payload. SSL Commerz sends IPN (and the success/fail/cancel redirects)
+     * as application/x-www-form-urlencoded POST, so $_POST is the canonical source. Fall back
+     * to the raw body parsed as form-encoded, then JSON, for resilience and test harnesses.
+     */
+    private function getRequestData()
+    {
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- IPN is a server-to-server callback from SSL Commerz; it cannot carry a WP nonce and is authenticated via verifyIpnSignature() and the server-side validation API.
+        if (!empty($_POST)) {
+            // phpcs:ignore WordPress.Security.NonceVerification.Missing -- See note above; raw fields are validated downstream against SSL Commerz.
+            return wp_unslash($_POST);
+        }
+
+        $raw = file_get_contents('php://input');
+        if (empty($raw)) {
+            return [];
+        }
+
+        $decoded = json_decode($raw, true);
+        if (is_array($decoded)) {
+            return $decoded;
+        }
+
+        $parsed = [];
+        parse_str($raw, $parsed);
+
+        return is_array($parsed) ? $parsed : [];
+    }
+
+    /**
+     * Verify the SSL Commerz IPN hash signature.
+     *
+     * Rebuilds the hash from the fields named in verify_key plus md5(store password),
+     * sorted by key, and compares it to verify_sign.
+     */
+    private function verifyIpnSignature($data)
+    {
+        $verifySign = Arr::get($data, 'verify_sign');
+        $verifyKey  = Arr::get($data, 'verify_key');
+
+        if (!$verifySign || !$verifyKey) {
+            return false;
+        }
+
+        $storePassword = (new SslcommerzSettingsBase())->getStorePassword();
+        if (!$storePassword) {
+            return false;
+        }
+
+        $hashData = [];
+        foreach (explode(',', $verifyKey) as $key) {
+            if (isset($data[$key])) {
+                $hashData[$key] = $data[$key];
+            }
+        }
+
+        $hashData['store_passwd'] = md5($storePassword);
+        ksort($hashData);
+
+        $hashString = '';
+        foreach ($hashData as $key => $value) {
+            $hashString .= $key . '=' . $value . '&';
+        }
+        $hashString = rtrim($hashString, '&');
+
+        return hash_equals(md5($hashString), (string) $verifySign);
+    }
+
+    /**
      * Handle transaction status from SSL Commerz
      */
     private function handleStatus($transaction, $vendorTransaction, $postData = [])
     {
 
         $status = Arr::get($vendorTransaction, 'status');
-        
+
         $fluentCartStatus = $this->mapStatus($status);
 
         if ($fluentCartStatus === Status::TRANSACTION_SUCCEEDED) {
-            if ($transaction->status === Status::TRANSACTION_SUCCEEDED) {
-                $this->sendErrorResponse('Transaction already processed');
-                return;
-            }
-
-
             // Payment successful - update transaction
             $updateData = [
                 'status'           => $fluentCartStatus,
@@ -165,9 +239,21 @@ class SslcommerzWebhook
                 'sslcommerz_ipn_post' => $postData // Store original POST data for debugging
             ]);
 
-            $transaction->update($updateData);
+            // Atomic guard: only one process (IPN or customer-return confirmation) wins this
+            // write. The WHERE clause makes the success transition happen exactly once even if
+            // both arrive concurrently, preventing duplicate logs / order-status syncs.
+            $marked = (bool) OrderTransaction::query()
+                ->where('id', $transaction->id)
+                ->where('status', '!=', Status::TRANSACTION_SUCCEEDED)
+                ->update($updateData);
 
-            
+            if (!$marked) {
+                $this->sendErrorResponse('Transaction already processed');
+                return;
+            }
+
+            $transaction->fill($updateData);
+
             fluent_cart_add_log('SSL Commerz Payment Success', 'Payment confirmed via IPN. Val ID: ' . $updateData['vendor_charge_id'], 'info', [
                 'module_name' => 'order',
                 'module_id'   => $transaction->order_id,
@@ -287,9 +373,43 @@ class SslcommerzWebhook
 
         // Get refund details
         $refundRefId = Arr::get($postData, 'refund_ref_id');
-        $refundAmount = Arr::get($postData, 'refund_amount', Arr::get($refund, 'currency_amount', 0));
-        $refundCurrency = Arr::get($postData, 'currency', Arr::get($refund, 'currency_type', $order->currency));
-        
+
+        // Never trust the POSTed refund amount/status on its own. Refund IPNs may arrive
+        // without the payment signature, so authenticate the refund by querying SSL Commerz
+        // with its refund_ref_id and use the API's authoritative amount/status.
+        if (!$refundRefId) {
+            fluent_cart_add_log('SSL Commerz Refund Error', 'Refund notification missing refund_ref_id; ignoring.', 'error', [
+                'module_name' => 'order',
+                'module_id'   => $order->id,
+            ]);
+            return false;
+        }
+
+        $settings = new SslcommerzSettingsBase();
+        $refundStatusResponse = (new SslcommerzAPI())->queryRefundStatus($refundRefId, $settings->getMode());
+
+        if (is_wp_error($refundStatusResponse)) {
+            fluent_cart_add_log('SSL Commerz Refund Error', 'Failed to verify refund status: ' . $refundStatusResponse->get_error_message(), 'error', [
+                'module_name' => 'order',
+                'module_id'   => $order->id,
+            ]);
+            return false;
+        }
+
+        $apiStatus = strtolower((string) Arr::get($refundStatusResponse, 'status', ''));
+        if (!in_array($apiStatus, ['refunded', 'success', 'processing'], true)) {
+            fluent_cart_add_log('SSL Commerz Refund Skipped', 'Refund not in a refunded state (status: ' . $apiStatus . ').', 'info', [
+                'module_name' => 'order',
+                'module_id'   => $order->id,
+            ]);
+            return false;
+        }
+
+        // Authoritative amount/currency from the verified API response, falling back to the
+        // IPN payload only if the API omits them.
+        $refundAmount = Arr::get($refundStatusResponse, 'refund_amount', Arr::get($postData, 'refund_amount', Arr::get($refund, 'currency_amount', 0)));
+        $refundCurrency = Arr::get($refundStatusResponse, 'currency', Arr::get($postData, 'currency', Arr::get($refund, 'currency_type', $order->currency)));
+
         // Convert refund amount to cents
         $refundAmountCents = $this->convertToCents($refundAmount, $refundCurrency);
 

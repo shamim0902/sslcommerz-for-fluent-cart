@@ -5,6 +5,8 @@ namespace SslcommerzFluentCart\API;
 use FluentCart\Framework\Support\Arr;
 use SslcommerzFluentCart\Settings\SslcommerzSettingsBase;
 
+defined('ABSPATH') || exit;
+
 class SslcommerzAPI
 {
     private $settings;

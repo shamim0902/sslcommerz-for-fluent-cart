@@ -7,6 +7,8 @@ use FluentCart\App\Models\OrderTransaction;
 use FluentCart\App\Services\Payments\PaymentHelper;
 use FluentCart\Framework\Support\Arr;
 
+defined('ABSPATH') || exit;
+
 class SslcommerzRefund
 {
     /**
